@@ -50,7 +50,7 @@ class PrologBridge:
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         except FileNotFoundError:
-            return set()
+            return set(visited.keys())
         finally:
             try:
                 tmp_path.unlink()
@@ -58,15 +58,15 @@ class PrologBridge:
                 pass
 
         if proc.returncode != 0:
-            return set()
+            return set(visited.keys())
 
         output = proc.stdout.strip()
         if not output:
-            return set()
+            return set(visited.keys())
         try:
             parsed = ast.literal_eval(output)
         except (ValueError, SyntaxError):
-            return set()
+            return set(visited.keys())
 
         safe: Set[Position] = set()
         for item in parsed:
