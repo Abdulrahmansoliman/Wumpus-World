@@ -50,6 +50,7 @@ safe_start(Pits, (WX, WY)) :-
 
 consistent_model((WX, WY), Pits) :-
     safe_start(Pits, (WX, WY)),
+    \+ member((WX, WY), Pits),
     respect_breeze(Pits),
     respect_stench((WX, WY)).
 

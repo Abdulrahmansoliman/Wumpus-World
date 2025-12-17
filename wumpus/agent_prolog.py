@@ -74,8 +74,6 @@ class PrologAgent(Agent):
             forward_pos = self._forward(self.position, self.direction)
             if not percept.bump:
                 self.position = forward_pos
-        elif self.last_action == Action.GRAB:
-            self.has_gold = self.has_gold or percept.glitter is False
         if percept.scream:
             self.wumpus_dead = True
 
