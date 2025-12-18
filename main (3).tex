@@ -1,0 +1,242 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{parskip}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\setlist[itemize]{noitemsep, topsep=2pt}
+\setlist[enumerate]{noitemsep, topsep=2pt}
+
+\title{\vspace{-1.2em}\textbf{AI Final Project: Wumpus World Game + Agents (Logic + Q-Learning)}}
+\date{CS152 \;|\; Minerva University \;|\; Prof.\ Shekhar \;\;\; \today}
+
+\begin{document}
+\pagenumbering{gobble}
+\maketitle
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+% =========================
+\section{Problem Definition}
+Wumpus World is a partially observable grid environment in which an agent must find gold and return to the start square while avoiding lethal hazards (pits and a live Wumpus). The challenge is that the agent cannot directly observe hazards; instead, it receives local percepts (Breeze, Stench, Glitter, Bump, Scream) and must make decisions under uncertainty. This makes the problem a good fit for AI approaches that emphasize (i) explicit knowledge representation and inference (a knowledge-based/logical agent) and/or (ii) learning a policy from experience (reinforcement learning). In this project I built a complete Wumpus World simulator (including an interactive GUI) and implemented two AI agents: (1) a Prolog-backed logical agent that infers squares that are \emph{provably safe} given its percept history, and (2) a Q-learning agent that learns an exploration/exploitation policy, extended into a hybrid system with safety rules and structured return-home behavior.
+
+% =========================
+\section{Solution Specification}
+\subsection{Environment and scoring}
+The environment is an $N \times N$ grid (restricted to $3\times 3$ or $4\times 4$ in the GUI). The agent starts at $(1,1)$ facing East. Each step the agent chooses an action from:
+\[
+\{\texttt{Forward},\texttt{TurnLeft},\texttt{TurnRight},\texttt{Grab},\texttt{Shoot},\texttt{Climb}\}.
+\]
+Percepts are computed from the true world state:
+\begin{itemize}
+  \item \textbf{Breeze}: at least one adjacent pit.
+  \item \textbf{Stench}: at least one adjacent live Wumpus.
+  \item \textbf{Glitter}: gold in the current square (not yet grabbed).
+  \item \textbf{Bump}: attempted \texttt{Forward} into a wall (no movement).
+  \item \textbf{Scream}: Wumpus killed by \texttt{Shoot}.
+\end{itemize}
+\paragraph{Path planning.}
+Both agents use \textbf{Breadth-First Search (BFS)} to compute shortest paths 
+over the set of safe squares. This ensures optimal routing when returning home 
+with gold or navigating to frontier cells.
+
+I used the standard AIMA-style scoring: $-1$ per action, $-10$ for shooting (only if the arrow is available), $+1000$ for climbing out with gold, and $-1000$ on death (pit or live Wumpus). This score is exposed in the GUI and is also used as the reward signal for Q-learning.
+
+\subsection{Deliverables and code structure}
+The project consists of:
+\begin{itemize}
+  \item A Python simulator (\texttt{world.py}) implementing dynamics, percepts, and scoring.
+  \item A Tkinter GUI (\texttt{gui.py}) supporting three modes: \texttt{human}, \texttt{prolog}, \texttt{qlearn}, with a riskiness slider $\epsilon$ for Q-learning and a seed/grid-size dialog.
+  \item A Prolog knowledge base (\texttt{knowledge\_base.pl}) and a bridge (\texttt{bridge.py}) that queries SWI-Prolog and caches results.
+  \item A Prolog logical agent (\texttt{agent\_prolog.py}) that chooses actions using inferred safe squares.
+  \item A Q-learning / hybrid agent (\texttt{agent\_qlearn.py}) plus console scripts for training and evaluation (\texttt{qlearn\_train.py}, \texttt{qlearn\_eval.py}).
+\end{itemize}
+
+\subsection{Prolog logical agent (\#ailogic)}
+\paragraph{Representation.}
+The Prolog KB stores percept facts about visited squares:
+\texttt{breeze(X,Y)}, \texttt{no\_breeze(X,Y)}, \texttt{stench(X,Y)}, \texttt{no\_stench(X,Y)}, and an optional \texttt{wumpus\_dead} fact.
+Adjacency is defined by the grid geometry.
+
+\paragraph{Inference via model checking.}
+Given the percept constraints, Prolog enumerates all \emph{consistent models} (possible worlds) by choosing:
+\begin{itemize}
+  \item a Wumpus location (not $(1,1)$),
+  \item a subset of pit locations (excluding $(1,1)$),
+\end{itemize}
+and filtering those choices by the percept constraints:
+\begin{itemize}
+  \item \texttt{breeze(X,Y)} $\Rightarrow$ at least one adjacent pit,
+  \item \texttt{no\_breeze(X,Y)} $\Rightarrow$ no adjacent pits,
+  \item \texttt{stench(X,Y)} $\Rightarrow$ adjacent Wumpus (unless \texttt{wumpus\_dead}).
+\end{itemize}
+A square is returned as \textbf{provably safe} iff it is safe in \emph{all} consistent models. This is exactly the semantic idea of entailment where: a statement is safe to act on when it holds in every model consistent with the KB.
+
+\paragraph{Action selection.}
+The Prolog agent maintains a visited-percept history and repeatedly:
+\begin{enumerate}
+  \item queries Prolog for \texttt{provably\_safe},
+  \item selects a target safe unvisited square (with a heuristic priority to explore near ``glimmer'' cells when enabled),
+  \item produces a plan to reach the target using the current safe set,
+  \item executes the plan as turn/forward primitives.
+\end{enumerate}
+If \texttt{glitter} is perceived, it immediately \texttt{Grab}s and then returns to $(1,1)$ and \texttt{Climb}s. If no safe plan exists, it retreats to start and climbs out (conservative behavior).
+
+\subsection{Q-learning agent (\#aiconcepts extension) and hybridization}
+\paragraph{Baseline Q-learning.}
+I implemented a tabular Q-learning policy with $\epsilon$-greedy exploration. Training used $\alpha=0.2$, $\gamma=0.95$, 80,000 episodes across 200 different world seeds, with a $-500$ timeout penalty. The update rule:
+\[
+Q(s_t,a_t) \leftarrow Q(s_t,a_t) + \alpha \Big(r_t + \gamma \max_{a} Q(s_{t+1}, a) - Q(s_t,a_t)\Big).
+\]
+
+\paragraph{State encoding.}
+The state is a 13-tuple: $(x, y, \text{dir}, \text{hasGold}, \text{hasArrow}, \text{wumpusDead}, V, B, \overline{B}, S, \overline{S}, \text{glitter}, \text{glimmer})$, where $V, B, \overline{B}, S, \overline{S}$ are bitmasks encoding visited cells and breeze/stench observations.
+
+\paragraph{Why hybridization was needed.}
+Pure tabular Q-learning struggled with (i) sparse reward, (ii) partial observability, and (iii) catastrophic mistakes (walking into pits). To address this, I introduced hybrid components that mirror practical agent design:
+\begin{itemize}
+  \item \textbf{Reflex overrides}: \texttt{Grab} when \texttt{glitter} is observed; \texttt{Climb} when at start with gold.
+  \item \textbf{Belief memory masks}: compact bitmasks encoding visited cells and whether breeze/stench was observed at those cells, reducing state aliasing across different worlds.
+  \item \textbf{Safety shield}: lightweight pit/wumpus inference from local percepts; actions that would move into confirmed hazards are filtered out.
+  \item \textbf{Stuck detector}: if the agent stays in the same cell for many steps (turn loops), temporarily increases exploration or forces a turn/forward when appropriate.
+  \item \textbf{Return-home logic}: after grabbing gold, the agent stops exploring ($\epsilon \leftarrow 0$) and uses BFS over inferred safe cells to return to $(1,1)$.
+\end{itemize}
+
+\paragraph{Note on ``glimmer''.}
+In addition to standard percepts, I implemented an optional non-standard percept \texttt{glimmer} (gold in a neighboring cell) primarily for GUI visualization and as an optional learning signal. When reporting results, I state whether glimmer was enabled.
+
+% =========================
+\section{Analysis of Solution}
+\subsection{Experiment setup}
+I evaluated the hybrid Q-learning agent across different $\epsilon$ values using \texttt{qlearn\_eval.py}. Each run uses a grid size $4\times 4$, fixed pit probability (default $0.2$), and a maximum number of steps per episode (timeouts counted explicitly). For each $\epsilon$, I recorded win rate, death rate, timeout rate, average score, and average steps.
+
+\subsection{Results: Agent comparison}
+Table~\ref{tab:agents} compares the two agents. The Prolog agent never dies (conservative inference) but often escapes without gold when the path is blocked. The Q-learning agent wins more aggressively but has higher mortality.
+
+\begin{table}[H]
+\centering
+\caption{Agent comparison (100 episodes, random seeds).}
+\label{tab:agents}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Agent & Win\% & Death\% & Safe Escape\% \\
+\midrule
+Prolog (logical) & 40.0 & 0.0 & 56.7 \\
+Q-Learning ($\epsilon$=0.1) & 33.0 & 62.0 & 5.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Results: win rate vs riskiness}
+Figure~\ref{fig:eps_win} shows that increasing $\epsilon$ reduced win rate: low $\epsilon$ (exploitation) performed best, while higher $\epsilon$ introduced fatal random moves. Some worlds are unsolvable due to random pit/Wumpus placement blocking access to gold.
+
+\begin{table}[H]
+\centering
+\caption{Q-learning win rate vs $\epsilon$.}
+\label{tab:eps}
+\begin{tabular}{@{}cccccc@{}}
+\toprule
+$\epsilon$ & 0.00 & 0.05 & 0.10 & 0.20 & 0.30 \\
+\midrule
+Win rate & 0.33 & 0.32 & 0.31 & 0.30 & 0.28 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Discussion and limitations}
+Two limitations dominated the design:
+\begin{itemize}
+  \item \textbf{Logical model checking cost.} Prolog enumerates pit subsets, which is exponential in grid size; therefore the logical agent is capped to small boards.
+  \item \textbf{Partial observability for Q-learning.} Tabular Q-learning does not naturally represent full belief states. The belief-memory masks and safety shield improved stability, but this remains an approximation.
+\end{itemize}
+Despite these constraints, the final system is a realistic hybrid agent: explicit inference where it is reliable (safety constraints), search where it is appropriate (return-home routing), and learning where it helps most (balancing exploration vs exploitation in unknown areas).
+
+% =========================
+\clearpage
+\section*{References}
+\begin{itemize}
+  \item Stuart Russell and Peter Norvig. \emph{Artificial Intelligence: A Modern Approach}. (Chapters on Logical Agents and the Wumpus World).
+  \item Richard S. Sutton and Andrew G. Barto. \emph{Reinforcement Learning: An Introduction}. (Q-learning and $\epsilon$-greedy exploration).
+  \item SWI-Prolog documentation (for Prolog execution and scripting).
+\end{itemize}
+
+% =========================
+\appendix
+\section{Appendix A: Evaluation plots}
+% Put your plot file in the same folder as the .tex (or update the path).
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\linewidth]{qlearn_eval.png}
+\caption{Win rate vs exploration parameter $\epsilon$ (riskiness). The Q-learning agent was evaluated over 100 random worlds at each $\epsilon$ value. Lower $\epsilon$ (more exploitation) yields higher win rates, as the agent relies on learned Q-values rather than random exploration that risks fatal moves into pits or the Wumpus.}
+\label{fig:eps_win}
+\end{figure}
+
+\section{Appendix B: Additional screenshots (optional)}
+% Add any extra screenshots here:
+% \begin{figure}[H]
+% \centering
+% \includegraphics[width=0.9\linewidth]{gui_screenshot.png}
+% \caption{GUI showing percept overlays and legend.}
+% \end{figure}
+
+\section{Appendix C: Original proposal}
+
+\subsection*{Problem Definition}
+I will implement a Wumpus World simulator along with a knowledge-based agent that incrementally builds a logical knowledge base from percepts encountered during exploration, like the one we implemented in the class.
+
+\subsection*{Targeted LOs}
+Indicate the LOs that you plan to apply in your project below. Note that all projects are expected to apply \#aicoding in addition to one or more content LOs, unless there are compelling reasons not to (need to discuss with Prof.\ beforehand). Also, to apply \#aiconcepts well, your project would need some investigation into the theoretical/philosophical basis of AI that goes beyond what we covered in terms of rationality and agent programs.
+
+\begin{itemize}
+  \item[$\checkmark$] \textbf{\#aicoding}
+  \item[$\checkmark$] \textbf{\#search}
+  \item[$\checkmark$] \textbf{\#ailogic}
+\end{itemize}
+
+\subsection*{Proposed Solution \& Deliverables}
+I will implement a Wumpus World simulator along with a knowledge-based agent that incrementally builds a logical knowledge base from percepts encountered during exploration. The agent will use propositional logic to represent knowledge about pits, the Wumpus, and safe locations, and apply logical inference to deduce which cells are safe or dangerous. I may use A* search algorithm and I will provide maybe a python simulation for the movements around the grid.
+
+\subsection*{Note}
+The final implementation exceeded the original proposal by also including a Q-learning agent (\#aiconcepts extension), BFS path planning, and an interactive GUI with three play modes.
+
+\section{AI Statement}
+I used AI tools (ChatGPT and Claude) as a development assistant while building and documenting this project. Specifically:
+\begin{itemize}
+  \item Brainstorming project scope and defining deliverables that align with course LOs.
+  \item Debugging help for Prolog/Python integration issues (SWI-Prolog calls, caching, parsing).
+  \item Suggestions for Q-learning stabilizations (timeouts as terminal penalties, tie-breaking, and evaluation scripts).
+  \item Editing and restructuring of report text for clarity and concision.
+\end{itemize}
+All implementation decisions, final code integration, and experimental runs were executed and validated by me.
+
+\section{HC/LO Appendix}
+\textbf{\#aicoding:} Built the Wumpus World simulator from scratch in \texttt{world.py}, added a Tkinter GUI with three play modes (human/Prolog/Q-learning), and wrote training scripts that saved reproducible models. The entire codebase is runnable with \texttt{python gui.py}.
+
+\textbf{\#ailogic:} Created \texttt{knowledge\_base.pl} to store percept facts (breeze, stench locations) and wrote Prolog rules that enumerate all consistent pit/Wumpus configurations. The agent only moves to squares that are safe in \emph{every} possible world—this is proper logical entailment.
+
+\textbf{\#search:} Coded a BFS function in \texttt{planning.py} that finds shortest paths over safe cells. Both agents use it: the Prolog agent to reach frontier squares, and the Q-learner to navigate home after grabbing gold.
+
+\textbf{HC \#rightproblem:} Wumpus World is partially observable—you can't see pits or the Wumpus directly, only local percepts. This forces the agent to reason under uncertainty rather than just pathfind, which is what makes it interesting.
+
+\textbf{HC \#breakitdown:} Separated concerns cleanly: \texttt{world.py} handles game mechanics, \texttt{bridge.py} interfaces with Prolog, \texttt{agent\_prolog.py} and \texttt{agent\_qlearn.py} implement the two approaches, and \texttt{gui.py} ties it all together.
+
+\textbf{HC \#algorithms:} Combined three core techniques—model checking for logical safety, $\epsilon$-greedy Q-learning for policy optimization, and BFS for optimal routing.
+
+\textbf{HC \#modeling:} Ran experiments over 100 worlds per $\epsilon$ value and logged win/death/timeout rates. Plotted win rate vs $\epsilon$ to show the exploration-exploitation tradeoff and compared Prolog vs Q-learning head-to-head.
+
+\textbf{HC \#professionalism:} Included a README with setup steps, saved evaluation results to CSV, generated plots with matplotlib, and structured the code so anyone can reproduce the experiments with a single command.
+\end{document}
