@@ -169,9 +169,11 @@ class World:
         if not self.terminated and (self.agent_pos in self.pits):
             self.terminated = True
             self.outcome = "fell_in_pit"
+            self.score -= 1000
         if not self.terminated and self.agent_pos == self.wumpus_pos and self.wumpus_alive:
             self.terminated = True
             self.outcome = "eaten_by_wumpus"
+            self.score -= 1000
 
         percept = self._compute_percept(bump=bump, scream=scream)
         return StepResult(
