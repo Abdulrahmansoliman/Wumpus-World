@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import random
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from wumpus.agent_prolog import PrologAgent
 from wumpus.bridge import PrologBridge
 from wumpus.world import Action, Direction, Percept, World
+
+Position = Tuple[int, int]
 
 
 class WumpusApp:
@@ -20,7 +23,7 @@ class WumpusApp:
 
         self.grid_size_var = tk.IntVar(value=4)
         self.pit_prob_var = tk.DoubleVar(value=0.2)
-        self.seed_var = tk.StringVar(value="0")
+        self.seed_var = tk.StringVar(value="")
         self.mode_var = tk.StringVar(value="agent")
         self.reveal_var = tk.BooleanVar(value=True)
         self.step_delay_var = tk.IntVar(value=400)
@@ -29,6 +32,7 @@ class WumpusApp:
         self.world: Optional[World] = None
         self.agent: Optional[PrologAgent] = None
         self.current_percept: Optional[Percept] = None
+        self.visited_percepts: Dict[Position, Percept] = {}
         self.step_count = 0
         self.running = False
         self.after_handle: Optional[str] = None
@@ -184,22 +188,37 @@ class WumpusApp:
             self.action_buttons[action] = btn
 
     def _add_labeled_entry(self, parent: tk.Frame, label: str, var, row: int, col: int, width: int) -> None:
-        tk.Label(parent, text=label, fg="#e2e8f0", bg="#0f172a").grid(row=row, column=col, sticky="w")
-        entry = tk.Entry(parent, textvariable=var, width=width, relief="flat", bg="#111827", fg="#e5e7eb", insertbackground="#e5e7eb")
-        entry.grid(row=row, column=col, sticky="we", padx=(0, 6))
+        box = tk.Frame(parent, bg="#0f172a")
+        box.grid(row=row, column=col, sticky="we", padx=(0, 8))
+        tk.Label(box, text=label, fg="#e2e8f0", bg="#0f172a").grid(row=0, column=0, sticky="w")
+        entry = tk.Entry(
+            box,
+            textvariable=var,
+            width=width,
+            relief="flat",
+            bg="#111827",
+            fg="#e5e7eb",
+            insertbackground="#e5e7eb",
+        )
+        entry.grid(row=1, column=0, sticky="we")
+        box.columnconfigure(0, weight=1)
 
     def start_game(self) -> None:
         try:
             size = int(self.grid_size_var.get())
             pit_prob = float(self.pit_prob_var.get())
             seed_str = self.seed_var.get().strip()
-            seed = int(seed_str) if seed_str else None
+            if seed_str:
+                seed = int(seed_str)
+            else:
+                seed = random.randint(0, 10**9)
+                self.seed_var.set(str(seed))
         except ValueError:
             messagebox.showerror("Invalid input", "Grid size, pit probability, and seed must be numeric.")
             return
 
-        if size < 2 or size > 10:
-            messagebox.showerror("Invalid grid size", "Grid size must be between 2 and 10.")
+        if size < 2 or size > 6:
+            messagebox.showerror("Invalid grid size", "Grid size must be between 2 and 6.")
             return
         if pit_prob < 0 or pit_prob > 0.6:
             messagebox.showerror("Invalid pit probability", "Pit probability must be between 0.0 and 0.6.")
@@ -213,6 +232,7 @@ class WumpusApp:
             self.agent = PrologAgent(grid_size=size, bridge=PrologBridge(kb_path))
             self.agent.reset()
         self.current_percept = self.world.initial_percept()
+        self.visited_percepts = {self.world.agent_pos: self.current_percept}
         self.step_count = 0
         self.running = True
         self._set_buttons_enabled(self.mode_var.get() == "human")
@@ -236,6 +256,7 @@ class WumpusApp:
         action = self.agent.act(self.current_percept)
         result = self.world.step(action)
         self.current_percept = result.percept
+        self.visited_percepts[self.world.agent_pos] = self.current_percept
         self.step_count += 1
         self._log(f"Agent: {action.value}")
         self._update_status(result)
@@ -251,6 +272,7 @@ class WumpusApp:
             return
         result = self.world.step(action)
         self.current_percept = result.percept
+        self.visited_percepts[self.world.agent_pos] = self.current_percept
         self.step_count += 1
         self._log(f"You: {action.value}")
         self._update_status(result)
@@ -290,14 +312,17 @@ class WumpusApp:
         cell = self.canvas_size / size
         self.canvas.delete("all")
 
+        visited = set(self.visited_percepts.keys())
+
         # Grid background
         for x in range(size):
             for y in range(size):
+                pos = (x + 1, y + 1)
                 x0 = x * cell
                 y0 = (size - y - 1) * cell
                 x1 = x0 + cell
                 y1 = y0 + cell
-                base_color = "#1f2937"
+                base_color = "#334155" if pos in visited else "#1f2937"
                 self.canvas.create_rectangle(x0, y0, x1, y1, fill=base_color, outline="#0f172a")
 
         # Hazards and gold (optionally revealed)
@@ -317,6 +342,26 @@ class WumpusApp:
 
         # Agent
         self._draw_agent(cell)
+
+        # Percept markers on visited squares
+        for (vx, vy), p in self.visited_percepts.items():
+            tags = []
+            if p.breeze:
+                tags.append("B")
+            if p.stench:
+                tags.append("S")
+            if p.glitter:
+                tags.append("G")
+            if tags:
+                cx = (vx - 0.5) * cell
+                cy = (size - vy + 0.5) * cell
+                self.canvas.create_text(
+                    cx,
+                    cy,
+                    text=" ".join(tags),
+                    fill="#e2e8f0",
+                    font=("Segoe UI", 12, "bold"),
+                )
 
         # Grid lines
         for i in range(size + 1):
