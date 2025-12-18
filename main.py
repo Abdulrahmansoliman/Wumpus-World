@@ -26,9 +26,9 @@ def run_episode(mode: str, size: int, pit_prob: float, seed: int) -> str:
         action = agent.act(percept)
         result = world.step(action)
         step += 1
-        print(f"Step {step}: action={action.value}, percept={result.percept}")
+        print(f"Step {step}: action={action.value}, score={result.score}, percept={result.percept}")
         if result.terminated:
-            print(f"Episode finished: {result.outcome}, has_gold={result.has_gold}")
+            print(f"Episode finished: {result.outcome}, has_gold={result.has_gold}, score={result.score}")
             return result.outcome or "unknown"
         percept = result.percept
 

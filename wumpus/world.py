@@ -47,6 +47,7 @@ class StepResult:
     terminated: bool
     outcome: Optional[str] = None
     has_gold: bool = False
+    score: int = 0
 
 
 class World:
@@ -75,6 +76,7 @@ class World:
         self.arrow_available = True
         self.terminated = False
         self.outcome: Optional[str] = None
+        self.score = 0
 
         self._generate_world()
 
@@ -124,10 +126,22 @@ class World:
 
     def step(self, action: Action) -> StepResult:
         if self.terminated:
-            return StepResult(percept=self._compute_percept(False, False), terminated=True, outcome=self.outcome, has_gold=self.has_gold)
+            return StepResult(
+                percept=self._compute_percept(False, False),
+                terminated=True,
+                outcome=self.outcome,
+                has_gold=self.has_gold,
+                score=self.score,
+            )
 
         bump = False
         scream = False
+
+        # base action cost
+        step_cost = -1
+        if action == Action.SHOOT and self.arrow_available:
+            step_cost = -10
+        self.score += step_cost
 
         if action == Action.TURN_LEFT:
             self.agent_dir = self.agent_dir.turn_left()
@@ -149,6 +163,8 @@ class World:
             if self.agent_pos == self.start:
                 self.terminated = True
                 self.outcome = "escaped_with_gold" if self.has_gold else "escaped_without_gold"
+                if self.has_gold:
+                    self.score += 1000
 
         if not self.terminated and (self.agent_pos in self.pits):
             self.terminated = True
@@ -158,7 +174,13 @@ class World:
             self.outcome = "eaten_by_wumpus"
 
         percept = self._compute_percept(bump=bump, scream=scream)
-        return StepResult(percept=percept, terminated=self.terminated, outcome=self.outcome, has_gold=self.has_gold)
+        return StepResult(
+            percept=percept,
+            terminated=self.terminated,
+            outcome=self.outcome,
+            has_gold=self.has_gold,
+            score=self.score,
+        )
 
     def _shoot_arrow(self) -> bool:
         dx, dy = 0, 0

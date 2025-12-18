@@ -23,10 +23,11 @@ class WumpusApp:
 
         self.grid_size_var = tk.IntVar(value=4)
         self.pit_prob_var = tk.DoubleVar(value=0.2)
-        self.seed_var = tk.StringVar(value="")
+        self.seed_var = tk.StringVar(value="")  # blank => random seed
         self.mode_var = tk.StringVar(value="agent")
         self.reveal_var = tk.BooleanVar(value=True)
-        self.step_delay_var = tk.IntVar(value=400)
+
+        self.agent_step_delay_ms = 350  # fixed delay; removed slider
 
         self.canvas_size = 520
         self.world: Optional[World] = None
@@ -52,12 +53,8 @@ class WumpusApp:
         controls = tk.Frame(self.root, bg="#0f172a")
         controls.pack(fill="x", padx=12)
 
-        self._add_labeled_entry(controls, "Grid Size", self.grid_size_var, 0, 0, width=6)
-        self._add_labeled_entry(controls, "Pit Prob", self.pit_prob_var, 0, 1, width=8)
-        self._add_labeled_entry(controls, "Seed", self.seed_var, 0, 2, width=8)
-
-        tk.Label(controls, text="Mode", fg="#e2e8f0", bg="#0f172a").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        tk.OptionMenu(controls, self.mode_var, "agent", "human").grid(row=1, column=1, sticky="we", pady=(6, 0))
+        tk.Label(controls, text="Mode", fg="#e2e8f0", bg="#0f172a").grid(row=0, column=0, sticky="w", pady=(6, 0))
+        tk.OptionMenu(controls, self.mode_var, "agent", "human").grid(row=0, column=1, sticky="we", pady=(6, 0))
 
         tk.Checkbutton(
             controls,
@@ -67,27 +64,12 @@ class WumpusApp:
             selectcolor="#1f2937",
             bg="#0f172a",
             activebackground="#0f172a",
-        ).grid(row=1, column=2, sticky="w", pady=(6, 0))
-
-        tk.Label(controls, text="Agent speed (ms)", fg="#e2e8f0", bg="#0f172a").grid(
-            row=2, column=0, sticky="w", pady=(6, 0)
-        )
-        tk.Scale(
-            controls,
-            variable=self.step_delay_var,
-            from_=100,
-            to=1200,
-            orient="horizontal",
-            length=150,
-            bg="#0f172a",
-            fg="#e2e8f0",
-            highlightthickness=0,
-        ).grid(row=2, column=1, sticky="we", pady=(6, 0))
+        ).grid(row=0, column=2, sticky="w", pady=(6, 0))
 
         start_btn = tk.Button(
             controls,
             text="Start Game",
-            command=self.start_game,
+            command=self.prompt_and_start_game,
             bg="#22c55e",
             fg="#0b1720",
             activebackground="#16a34a",
@@ -95,7 +77,7 @@ class WumpusApp:
             padx=12,
             pady=6,
         )
-        start_btn.grid(row=2, column=2, sticky="we", pady=(6, 0))
+        start_btn.grid(row=1, column=0, columnspan=3, sticky="we", pady=(6, 0))
 
         for i in range(3):
             controls.columnconfigure(i, weight=1)
@@ -140,6 +122,24 @@ class WumpusApp:
             font=("Segoe UI", 10),
         )
         self.percept_label.pack(fill="x", pady=(0, 6))
+
+        legend = tk.LabelFrame(info_frame, text="Legend", bg="#0f172a", fg="#e2e8f0")
+        legend.pack(fill="x", pady=(6, 6))
+
+        def legend_row(color: str, text: str):
+            row = tk.Frame(legend, bg="#0f172a")
+            row.pack(fill="x", pady=1)
+            swatch = tk.Canvas(row, width=14, height=14, bg="#0f172a", highlightthickness=0)
+            swatch.pack(side="left", padx=(4, 6))
+            swatch.create_rectangle(2, 2, 12, 12, fill=color, outline=color)
+            tk.Label(row, text=text, bg="#0f172a", fg="#e2e8f0").pack(side="left")
+
+        legend_row("#ef4444", "Pit (red)")
+        legend_row("#a855f7", "Wumpus (purple)")
+        legend_row("#eab308", "Gold (yellow)")
+        legend_row("#38bdf8", "Agent (blue)")
+        legend_row("#22c55e", "Start / Safe highlight (green)")
+        legend_row("#e2e8f0", "B/S/G letters = Breeze/Stench/Glitter on visited cells")
 
         self.log_text = tk.Text(
             info_frame,
@@ -203,22 +203,64 @@ class WumpusApp:
         entry.grid(row=1, column=0, sticky="we")
         box.columnconfigure(0, weight=1)
 
+    def prompt_and_start_game(self) -> None:
+        """Ask for grid size + seed before starting."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title("New Game Setup")
+        dlg.configure(bg="#0f172a")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        size_var = tk.IntVar(value=4)
+        seed_var = tk.StringVar(value="")
+        pit_var = tk.DoubleVar(value=float(self.pit_prob_var.get()))
+
+        tk.Label(dlg, text="Grid size (max 4x4):", bg="#0f172a", fg="#e2e8f0").pack(anchor="w", padx=12, pady=(10, 2))
+        size_menu = tk.OptionMenu(dlg, size_var, 3, 4)
+        size_menu.pack(fill="x", padx=12)
+
+        tk.Label(dlg, text="Seed (blank = random):", bg="#0f172a", fg="#e2e8f0").pack(anchor="w", padx=12, pady=(10, 2))
+        tk.Entry(dlg, textvariable=seed_var, bg="#111827", fg="#e5e7eb", insertbackground="#e5e7eb").pack(fill="x", padx=12)
+
+        tk.Label(dlg, text="Pit probability (0.0–0.6):", bg="#0f172a", fg="#e2e8f0").pack(anchor="w", padx=12, pady=(10, 2))
+        tk.Entry(dlg, textvariable=pit_var, bg="#111827", fg="#e5e7eb", insertbackground="#e5e7eb").pack(fill="x", padx=12)
+
+        btns = tk.Frame(dlg, bg="#0f172a")
+        btns.pack(fill="x", padx=12, pady=12)
+
+        def on_cancel():
+            dlg.destroy()
+
+        def on_start():
+            # apply choices
+            self.grid_size_var.set(int(size_var.get()))
+            self.pit_prob_var.set(float(pit_var.get()))
+            self.seed_var.set(seed_var.get().strip())
+            dlg.destroy()
+            self.start_game()
+
+        tk.Button(btns, text="Cancel", command=on_cancel, bg="#334155", fg="#e2e8f0", relief="flat").pack(side="right", padx=6)
+        tk.Button(btns, text="Start", command=on_start, bg="#22c55e", fg="#0b1720", relief="flat").pack(side="right")
+
+    def _resolve_seed(self) -> int:
+        s = self.seed_var.get().strip()
+        if s:
+            return int(s)
+        seed = random.randint(0, 10**9)
+        self.seed_var.set(str(seed))
+        return seed
+
     def start_game(self) -> None:
         try:
             size = int(self.grid_size_var.get())
             pit_prob = float(self.pit_prob_var.get())
-            seed_str = self.seed_var.get().strip()
-            if seed_str:
-                seed = int(seed_str)
-            else:
-                seed = random.randint(0, 10**9)
-                self.seed_var.set(str(seed))
+            seed = self._resolve_seed()
         except ValueError:
             messagebox.showerror("Invalid input", "Grid size, pit probability, and seed must be numeric.")
             return
 
-        if size < 2 or size > 6:
-            messagebox.showerror("Invalid grid size", "Grid size must be between 2 and 6.")
+        if size not in (3, 4):
+            messagebox.showerror("Invalid grid size", "Grid size must be 3 or 4 (max 4x4 due to Prolog complexity).")
             return
         if pit_prob < 0 or pit_prob > 0.6:
             messagebox.showerror("Invalid pit probability", "Pit probability must be between 0.0 and 0.6.")
@@ -240,7 +282,7 @@ class WumpusApp:
         self._update_status()
         self._draw_world()
         if self.mode_var.get() == "agent" and self.agent:
-            self.after_handle = self.root.after(self.step_delay_var.get(), self._agent_step)
+            self.after_handle = self.root.after(self.agent_step_delay_ms, self._agent_step)
 
     def _cancel_after(self) -> None:
         if self.after_handle is not None:
@@ -263,9 +305,9 @@ class WumpusApp:
         self._draw_world()
         if result.terminated:
             self.running = False
-            messagebox.showinfo("Game over", f"Outcome: {result.outcome}, gold: {result.has_gold}")
+            messagebox.showinfo("Game over", f"Outcome: {result.outcome}, gold: {result.has_gold}, score: {result.score}")
             return
-        self.after_handle = self.root.after(self.step_delay_var.get(), self._agent_step)
+        self.after_handle = self.root.after(self.agent_step_delay_ms, self._agent_step)
 
     def on_human_action(self, action: Action) -> None:
         if not self.running or self.world is None or self.current_percept is None:
@@ -280,7 +322,7 @@ class WumpusApp:
         if result.terminated:
             self.running = False
             self._set_buttons_enabled(False)
-            messagebox.showinfo("Game over", f"Outcome: {result.outcome}, gold: {result.has_gold}")
+            messagebox.showinfo("Game over", f"Outcome: {result.outcome}, gold: {result.has_gold}, score: {result.score}")
 
     def _set_buttons_enabled(self, enabled: bool) -> None:
         state = "normal" if enabled else "disabled"
@@ -291,6 +333,8 @@ class WumpusApp:
         outcome = getattr(result, "outcome", None)
         has_gold = getattr(result, "has_gold", False)
         status = f"Status: step {self.step_count}"
+        if self.world:
+            status += f" | score={self.world.score}"
         if outcome:
             status += f" | outcome={outcome}"
         if has_gold:
